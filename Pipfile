@@ -5,6 +5,7 @@ name = "pypi"
 
 [packages]
 requests = "*"
+leb128 = "*"
 
 [dev-packages]
 

@@ -1,42 +1,48 @@
-import urllib.parse
+import crc8
 import base64
-import json
 
-def base64_url_decode(inp):
-    return base64.urlsafe_b64decode(inp + b'=' * (4 - len(inp) % 4))
 
-#print(base64_url_decode(b"DbMG_38SBgbMi6f3lDF4"))
+def base64_to_bytearray(inp: bytes, view: bool = False):
+    try:
+        string = base64.urlsafe_b64decode(inp + b'=' * (len(inp) % 4))
+        hex_str = bytearray(string).hex()
+        byte_array = bytearray([int(hex_str[i:i + 2], 16) for i in range(0, len(hex_str), 2)])
+        if view:
+            hex_view = [hex_str[i:i + 2] for i in range(0, len(hex_str), 2)]
+            print("hex_view:", hex_view)
+            bin_view = " ".join([bin(int(byte, 16))[2:] for byte in hex_view])
+            print("bin_view", bin_view)
+        return byte_array
+    except:
+        return None
 
-h = b'\r\xb3\x06\xff\x7f\x14\x06\x06\x94\x8d\xa7\xf7\x941\x14'
 
-packets = [
-    {
-        "length": 13,
-        "payload": {
-            "src": 819,
-            "dst": 16383,
-            "serial": 1,
-            "dev_type": 6,
-            "cmd": 6,
-            "cmd_body": {
-                "timestamp": 1688984021000
-            }
-        },
-        "crc8": 138
-    }
-]
+response_bytes = base64_to_bytearray(b"DAH_fwEBAQVIVUIwMeE", True)
+print(response_bytes)
 
-# json -> str
-json_str = "".join(json.dumps(packets).split()) # игнор пробельных знаков
+ind = 0
 
-# str -> bytes
-encode_str = "".join(json.dumps(packets).split()).encode("utf-8")
 
-# bytes -> base64url
-base64url = base64.urlsafe_b64encode(encode_str)
+def calculate_crc8(data: bytearray):
+    crc = 0x00  # Начальное значение CRC
 
-print(json_str)
-print(base64url)
-print(base64.urlsafe_b64decode(base64url))
-print(base64.urlsafe_b64decode(base64url).decode())
-print(json.loads(base64.urlsafe_b64decode(base64url).decode()))
+    for byte in data:
+        crc ^= byte  # Исключающее ИЛИ между текущим значением CRC и байтом данных
+        for _ in range(8):
+            if crc & 0x80:  # Проверка старшего бита CRC
+                crc = (crc << 1) ^ 0x1d  # Сдвиг влево и XOR с полиномом 0x1d
+            else:
+                crc <<= 1  # Сдвиг влево
+        crc &= 0xff  # Ограничение CRC до 8 бит
+
+    return crc
+
+
+while ind < len(response_bytes):
+    packet_length = response_bytes[ind]
+    packet = response_bytes[ind + 1:ind + packet_length + 1]
+    ind += packet_length + 1
+    sm_crc8 = response_bytes[ind]
+    ind += 1
+
+    print(packet_length, packet, sm_crc8, calculate_crc8(packet))

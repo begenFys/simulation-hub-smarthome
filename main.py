@@ -18,6 +18,8 @@
 # 1. Битовые маски
 # 2. Догнать бинарное число до нужного кол-ва бит
 import sys
+from typing import List
+
 import requests
 import urllib.parse
 import base64
@@ -34,16 +36,57 @@ class Hub:
 
 
 class UrlCoder:
-    @staticmethod
-    def encode(text: str):
+    def base64_to_bytearray(self, inp: bytes):
+        try:
+            str = base64.urlsafe_b64decode(inp + b'=' * (len(inp) % 4))
+            hex_str = bytearray(str).hex()
+            byte_array = bytearray([int(hex_str[i:i + 2], 16) for i in range(0, len(hex_str), 2)])
+            return byte_array
+        except:
+            return None
+
+    def calculate_crc8(self, data: bytearray):
+        crc = 0x00  # Начальное значение CRC
+
+        for byte in data:
+            crc ^= byte  # Исключающее ИЛИ между текущим значением CRC и байтом данных
+            for _ in range(8):
+                if crc & 0x80:  # Проверка старшего бита CRC
+                    crc = (crc << 1) ^ 0x1d  # Сдвиг влево и XOR с полиномом 0x1d
+                else:
+                    crc <<= 1  # Сдвиг влево
+            crc &= 0xff  # Ограничение CRC до 8 бит
+
+        return crc
+
+    def split_packets(self, response_bytes: bytearray):
+        packets = []
+        ind = 0
+        while ind < len(response_bytes):
+            packet = {"length": response_bytes[ind], "payload": bytearray, "crc8": 0}
+            ind += 1
+            packet["payload"] = response_bytes[ind:ind + packet["length"]]
+            ind += packet["length"]
+            packet["crc8"] = response_bytes[ind]
+
+            if packet["crc8"] == self.calculate_crc8(packet["payload"]): # игнор пакет, если контрольная не совпадает
+                packets.append(packet)
+            ind += 1
+        return packets
+
+    def parse_payload(self, payload: bytearray):
         pass
 
-    @staticmethod
-    def decode(text: bytes):
-        decoded_data = urllib.parse.unquote(text)
-        print(decoded_data)
-        decoded_data = base64.urlsafe_b64decode(decoded_data + b'=' * (-len(decoded_data) % 4))
-        print(decoded_data)
+    def decode(self, response_base64: bytes):
+        response_bytes = self.base64_to_bytearray(response_base64)
+        if response_bytes:
+            packets = self.split_packets(response_bytes)
+            return packets
+        else:
+            return None
+
+    def encode(self, responses: List[dict]):
+        pass
 
 
 if __name__ == "__main__":
@@ -51,16 +94,16 @@ if __name__ == "__main__":
     if "http" not in URL:
         URL = f"http://{URL}"
     HUB_SRC: str = sys.argv[2]  # в uleb
+    urlcoder = UrlCoder()
 
-    print(URL)
     res = requests.post(URL)
-    while res.status_code != 204:
+    if res.status_code == 200:
         print(res.content)
-        res = requests.post(URL)
-    # if res.status_code == 200:
-    #
-    # elif res.status_code == 204:
-    #     sys.exit(0)
-    # else:
-    #     sys.exit(99)
+        if res.content:
+            response_decode = urlcoder.decode(res.content)
+            print(response_decode)
+    elif res.status_code == 204:
+        sys.exit(0)
+    else:
+        sys.exit(99)
 # python main.py localhost:9998 ef0
