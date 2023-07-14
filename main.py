@@ -307,7 +307,7 @@ class EnvSensor(Device):
         packet = UrlCoder.encode_packet(payload)
         return packet
 
-    def STATUS(self):
+    def STATUS(self): # не успел... хотя вроде он и не нужен
         pass
 
 
@@ -470,6 +470,12 @@ class Hub(Device):
     def contain_device(self, device: Union[EnvSensor, Switch, Lamp, Socket]) -> bool:
         return device in hub.devices
 
+    def trigger_devise(self, dev_name: str, cmd_body: int, serial: int):
+        for device in hub.devices:
+            if device.dev_name == dev_name:
+                device.STATUS(cmd_body[0], serial)
+                return device.SETSTATUS(self.src, self.__serial)
+                break
     def device_STATUS(self, device: Union[EnvSensor, Switch, Lamp, Socket], cmd_body: bytearray, serial: int) -> List[bytearray]:
         packets = []
         if device.dev_type == DEV.SWITCH:
@@ -485,7 +491,7 @@ class Hub(Device):
             if device.on != on:
                 device.STATUS(on, serial)
                 packets.append(device.SETSTATUS(self.src, self.__serial))
-        elif device.dev_type == DEV.ENV_SENSOR:  # в последнюю очередь
+        elif device.dev_type == DEV.ENV_SENSOR:  # в последнюю очередь делалось, возможно не работает
             packets_envsensors = []
             ind = 0
             values = []
@@ -494,6 +500,22 @@ class Hub(Device):
                 values.append(value)
                 ind += len(value)
 
+            ind = 0
+            for key in device.dev_props.keys():
+
+                triggers = device.dev_props[key]
+                for trigger in triggers:
+                    val_edge = trigger["value"]
+                    if trigger["oper"] == 1:
+                        if values[ind] > val_edge:
+                            packets_envsensors.extend(self.trigger_devise(trigger["name"], triggers["on"], serial))
+                    else:
+                        if values[ind] < val_edge:
+                            packets_envsensors.extend(self.trigger_devise(trigger["name"], triggers["on"], serial))
+                ind += 1
+
+            if packets_envsensors:
+                packets.extend(packets_envsensors)
 
         return packets
 
