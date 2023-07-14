@@ -9,7 +9,6 @@ p = [env.IAMHERE()]
 print(p)
 payload = UrlCoder.decode(UrlCoder.encode(p))[0]["payload"]
 env1 = EnvSensor(payload["src"], payload["dev_type"], payload["cmd_body"]["dev_name"], payload["cmd_body"]["dev_props"])
-print(env1.dev_props)
-print(env.dev_props == env1.dev_props)
-print(env.src, env1.src)
-print(env.dev_name, env1.dev_name)
+
+
+print(env.GETSTATUS(int("ef0", 16)))

@@ -288,6 +288,11 @@ class EnvSensor(Device):
         packet = UrlCoder.encode_packet(payload)
         return packet
 
+    def GETSTATUS(self, hub_src: int):
+        payload = UrlCoder.encode_payload(hub_src, self.src, self.__serial, self.dev_type, CMD.GETSTATUS)
+        packet = UrlCoder.encode_packet(payload)
+        return packet
+
     def STATUS(self):
         pass
 
@@ -301,9 +306,6 @@ class Switch(Device):
     def serial(self) -> int:
         self.__serial += 1
         return self.__serial - 1
-
-    def WHOISHERE(self) -> None:
-        pass
 
     def IAMHERE(self) -> None:
         pass
@@ -321,9 +323,6 @@ class Lamp(Device):
     def serial(self) -> int:
         self.__serial += 1
         return self.__serial - 1
-
-    def WHOISHERE(self) -> None:
-        pass
 
     def IAMHERE(self) -> None:
         pass
@@ -345,9 +344,6 @@ class Socket(Device):
         self.__serial += 1
         return self.__serial - 1
 
-    def WHOISHERE(self) -> None:
-        pass
-
     def IAMHERE(self) -> None:
         pass
 
@@ -362,6 +358,7 @@ class Hub(Device):
     def __init__(self, src: int, dev_type: int, dev_name: str) -> None:
         super().__init__(src, dev_type, dev_name)
         self.__serial = 1  # REWORK: понять как нормально наследовать статические атрибуты
+        self.env_sensors = []
         self.devices = []
         # self.__env_sensors: List[EnvSensor] = []
         # self.__switches: List[Switch] = []
@@ -393,15 +390,12 @@ class Hub(Device):
         packet = UrlCoder.encode_packet(payload)
         return packet
 
-    def GETSTATUS(self) -> None:
-        pass
-
-    def SETSTATUS(self) -> None:
+    def device_STATUS(self, device: Union[Lamp, Socket]) -> None:
         pass
 
     def devices_IAMHERE(self) -> List[bytearray]:
         packets = []
-        for device in self.devices:
+        for device in self.env_sensors + self.devices:
             packets.append(device.IAMHERE())
         return packets
 
@@ -446,11 +440,18 @@ if __name__ == "__main__":
 
                     if payload["dev_type"] == DEV.ENV_SENSOR:
                         env_sensor = EnvSensor(payload["src"], DEV.ENV_SENSOR, payload["cmd_body"]["dev_name"], payload["cmd_body"]["dev_props"])
-                        if env_sensor not in hub.devices["EnvSensor"]:
-                            hub.devices
+                        if env_sensor not in hub.env_sensors:
+                            hub.env_sensors.append(env_sensor)
 
-                elif payload["cmd"] == CMD.IAMHERE and not TIMEOUT_FLAG:
-                    pass
+                elif payload["cmd"] == CMD.IAMHERE and TIMEOUT_FLAG:
+                    if payload["dev_type"] == DEV.ENV_SENSOR:
+                        env_sensor = EnvSensor(payload["src"], DEV.ENV_SENSOR, payload["cmd_body"]["dev_name"], payload["cmd_body"]["dev_props"])
+                        if env_sensor not in hub.env_sensors:
+                            hub.env_sensors.append(env_sensor)
+
+                elif payload["cmd"] == CMD.STATUS and TIMEOUT_FLAG:
+                    if payload["dev_type"] == DEV.ENV_SENSOR:
+
                 TIMEOUT_FLAG = True
 
         elif res.status_code == 204:
