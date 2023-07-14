@@ -139,7 +139,10 @@ class UrlCoder:
         payload_json["cmd"] = payload[ind]
         ind += 1
         if ind < len(payload):
-            payload_json["cmd_body"] = UrlCoder.get_cmd_body(payload[ind:])
+            if payload_json["cmd"] in (CMD.WHOISHERE, CMD.IAMHERE):
+                payload_json["cmd_body"] = UrlCoder.get_cmd_body(payload[ind:])
+            else:
+                payload_json["cmd_body"] = payload[ind:]  # разные случаи
         return payload_json
 
     @staticmethod
@@ -227,13 +230,14 @@ class EnvSensor(Device):
             if sensors & 2 ** i:
                 sensors_dict[i] = []
 
-        ind += 1 # BAD
+        ind += 1  # BAD
         # вот там был лишний байт из-за которого всё ломалось 0х04
         # такое ощущение что это параметр кол-ва триггеров о котором не сказали....
 
         ind += 1
         while ind < len(data):
-            temp = {"on" : None, "name": None, "oper": None, "value": None} # у датчика наверняка можно поставить больше и меньше
+            temp = {"on": None, "name": None, "oper": None,
+                    "value": None}  # у датчика наверняка можно поставить больше и меньше
             op = data[ind]
             temp["on"] = op & 1
             op >>= 1
@@ -257,9 +261,6 @@ class EnvSensor(Device):
 
         return sensors_dict
 
-
-
-
     @property
     def serial(self) -> int:
         self.__serial += 1
@@ -271,13 +272,13 @@ class EnvSensor(Device):
         cmd_body = bytearray()
         cmd_body.extend(str_to_bytearray(self.dev_name))
         sensors = 0
-        count_triggers = 0 # непонятный найденный самим параметр
+        count_triggers = 0  # непонятный найденный самим параметр
         triggers = bytearray()
         for key in self.dev_props.keys():
-            sensors |= 2**key
+            sensors |= 2 ** key
             count_triggers += len(self.dev_props[key])
             for trigger in self.dev_props[key]:
-                triggers.append((key << 2) | (trigger["oper"] << 1) | trigger["on"]) # преобразуем маску обратно
+                triggers.append((key << 2) | (trigger["oper"] << 1) | trigger["on"])  # преобразуем маску обратно
                 triggers.extend(uleb128_encode(trigger["value"]))
                 triggers.extend(str_to_bytearray(trigger["name"]))
         cmd_body.append(sensors)
@@ -298,19 +299,40 @@ class EnvSensor(Device):
 
 
 class Switch(Device):
-    def __init__(self, src: int, dev_type: int, dev_name: str) -> None:
+    def __init__(self, src: int, dev_type: int, dev_name: str, dev_props: bytearray) -> None:
         super().__init__(src, dev_type, dev_name)
         self.__serial = 1
+        self.on = None
+        self.dev_props = self.__parse_dev_props(dev_props)
 
+    def __parse_dev_props(self, data: bytearray) -> List[str]:
+        dev_props = []
+        ind = 0
+        while ind < len(data):
+            str_len = data[ind]
+            ind += 1
+            dev_props.append(data[ind: ind + str_len].decode())
+            ind += str_len
+        return dev_props
     @property
     def serial(self) -> int:
         self.__serial += 1
         return self.__serial - 1
 
-    def IAMHERE(self) -> None:
-        pass
+    def IAMHERE(self) -> bytearray:
+        payload = UrlCoder.encode_payload(self.src, BROADCAST_DST, self.__serial, self.dev_type, CMD.IAMHERE)
 
-    def STATUS(self) -> None:
+        cmd_body = bytearray()
+        cmd_body.extend(str_to_bytearray(self.dev_name))
+        dev_props = bytearray()
+        for string in self.dev_props:
+            dev_props.extend(str_to_bytearray(string))
+        payload.extend(cmd_body)
+
+        packet = UrlCoder.encode_packet(payload)
+        return packet
+
+    def STATUS(self, on: int, hub: Hub) -> bytearray:
         pass
 
 
@@ -318,47 +340,70 @@ class Lamp(Device):
     def __init__(self, src: int, dev_type: int, dev_name: str) -> None:
         super().__init__(src, dev_type, dev_name)
         self.__serial = 1
+        self.on = None
 
     @property
     def serial(self) -> int:
         self.__serial += 1
         return self.__serial - 1
 
-    def IAMHERE(self) -> None:
-        pass
+    def IAMHERE(self) -> bytearray:
+        payload = UrlCoder.encode_payload(self.src, BROADCAST_DST, self.__serial, self.dev_type, CMD.IAMHERE)
+        cmd_body = bytearray()
+        cmd_body.extend(str_to_bytearray(self.dev_name))
+        payload.extend(cmd_body)
+        packet = UrlCoder.encode_packet(payload)
+        return packet
 
-    def STATUS(self) -> None:
-        pass
+    def STATUS(self, on: int) -> None:
+        if on:
+            self.on = True
+        else:
+            self.on = False
 
-    def SETSTATUS(self) -> None:
-        pass
+    def SETSTATUS(self) -> bytearray:
+        payload = UrlCoder.encode_payload(self.src, BROADCAST_DST, self.__serial, self.dev_type, CMD.IAMHERE)
+        payload.append(self.on) # cmd_body
+        packet = UrlCoder.encode_packet(payload)
+        return packet
 
 
 class Socket(Device):
     def __init__(self, src: int, dev_type: int, dev_name: str) -> None:
         super().__init__(src, dev_type, dev_name)
         self.__serial = 1
+        self.on = None
 
     @property
     def serial(self) -> int:
         self.__serial += 1
         return self.__serial - 1
 
-    def IAMHERE(self) -> None:
-        pass
+    def IAMHERE(self) -> bytearray:
+        payload = UrlCoder.encode_payload(self.src, BROADCAST_DST, self.__serial, self.dev_type, CMD.IAMHERE)
+        cmd_body = bytearray()
+        cmd_body.extend(str_to_bytearray(self.dev_name))
+        payload.extend(cmd_body)
+        packet = UrlCoder.encode_packet(payload)
+        return packet
 
-    def STATUS(self) -> None:
-        pass
+    def STATUS(self, on: int) -> None:
+        if on:
+            self.on = True
+        else:
+            self.on = False
 
-    def SETSTATUS(self) -> None:
-        pass
+    def SETSTATUS(self) -> bytearray:
+        payload = UrlCoder.encode_payload(self.src, BROADCAST_DST, self.__serial, self.dev_type, CMD.IAMHERE)
+        payload.append(self.on)  # cmd_body
+        packet = UrlCoder.encode_packet(payload)
+        return packet
 
 
 class Hub(Device):
     def __init__(self, src: int, dev_type: int, dev_name: str) -> None:
         super().__init__(src, dev_type, dev_name)
         self.__serial = 1  # REWORK: понять как нормально наследовать статические атрибуты
-        self.env_sensors = []
         self.devices = []
         # self.__env_sensors: List[EnvSensor] = []
         # self.__switches: List[Switch] = []
@@ -390,13 +435,31 @@ class Hub(Device):
         packet = UrlCoder.encode_packet(payload)
         return packet
 
-    def device_STATUS(self, device: Union[Lamp, Socket]) -> None:
-        pass
+    def add_device(self, device: Union[EnvSensor, Lamp, Socket]) -> None:
+        self.devices.append(device)
+
+    def device_STATUS(self, device: Union[EnvSensor, Lamp, Socket], payload: bytearray) -> None:
+        if device.dev_type == DEV.ENV_SENSOR:
+            ind = 0
+            values = []
+            while ind < len(payload):
+                value = get_uleb128_from_bytearray(payload[ind:])
+                values.append(value)
+                ind += len(value)
+            print(dev, values)
+        elif device.dev_type == DEV.SWITCH:
+            dev
 
     def devices_IAMHERE(self) -> List[bytearray]:
         packets = []
-        for device in self.env_sensors + self.devices:
+        for device in self.devices:
             packets.append(device.IAMHERE())
+        return packets
+
+    def devices_GETSTATUS(self) -> List[bytearray]:
+        packets = []
+        for device in self.devices:
+            packets.append(device.GETSTATUS())
         return packets
 
 
@@ -439,19 +502,27 @@ if __name__ == "__main__":
                     PACKETS.extend(hub.devices_IAMHERE())
 
                     if payload["dev_type"] == DEV.ENV_SENSOR:
-                        env_sensor = EnvSensor(payload["src"], DEV.ENV_SENSOR, payload["cmd_body"]["dev_name"], payload["cmd_body"]["dev_props"])
-                        if env_sensor not in hub.env_sensors:
-                            hub.env_sensors.append(env_sensor)
+                        env_sensor = EnvSensor(payload["src"], DEV.ENV_SENSOR, payload["cmd_body"]["dev_name"],
+                                               payload["cmd_body"]["dev_props"])
+                        if env_sensor not in hub.devices:
+                            hub.add_device(env_sensor)
 
                 elif payload["cmd"] == CMD.IAMHERE and TIMEOUT_FLAG:
                     if payload["dev_type"] == DEV.ENV_SENSOR:
-                        env_sensor = EnvSensor(payload["src"], DEV.ENV_SENSOR, payload["cmd_body"]["dev_name"], payload["cmd_body"]["dev_props"])
-                        if env_sensor not in hub.env_sensors:
-                            hub.env_sensors.append(env_sensor)
+                        env_sensor = EnvSensor(payload["src"], DEV.ENV_SENSOR, payload["cmd_body"]["dev_name"],
+                                               payload["cmd_body"]["dev_props"])
+                        if env_sensor not in hub.devices:
+                            hub.devices.append(env_sensor)
+
 
                 elif payload["cmd"] == CMD.STATUS and TIMEOUT_FLAG:
-                    if payload["dev_type"] == DEV.ENV_SENSOR:
+                    for dev in hub.devices:
+                        if dev.src == payload["src"]:
+                            packet = hub.device_STATUS(dev, payload["cmd_body"])
+                            break
 
+                if TIMEOUT == 300:  # прошло максимальное время, можно отправлять снова
+                    PACKETS.extend(hub.devices_GETSTATUS())
                 TIMEOUT_FLAG = True
 
         elif res.status_code == 204:
