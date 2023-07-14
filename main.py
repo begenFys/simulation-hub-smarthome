@@ -113,7 +113,7 @@ class UrlCoder:
 
     @staticmethod
     def get_cmd_body(cmd_body: bytearray) -> Dict:
-        dev_name = bytearray_to_str(cmd_body)
+        dev_name = bytearray_to_str(cmd_body).decode()
         dev_props = cmd_body[len(dev_name) + 1:]
         return {"dev_name": dev_name, "dev_props": dev_props}
 
@@ -224,17 +224,21 @@ class EnvSensor(Device):
         sensors = data[ind]
         sensors_dict = {}
         for i in range(4):
-            sensors_dict[2**i] = [] if sensors & 2**i else None
+            if sensors & 2 ** i:
+                sensors_dict[i] = []
 
         ind += 1 # BAD
+        # вот там был лишний байт из-за которого всё ломалось 0х04
+        # такое ощущение что это параметр кол-ва триггеров о котором не сказали....
 
         ind += 1
         while ind < len(data):
             temp = {"on" : None, "name": None, "oper": None, "value": None} # у датчика наверняка можно поставить больше и меньше
-            op = bin(data[ind])[2:]
-            op = "0"*(4 - len(op)) + op
-            temp["on"] = 1 if op[-1] == "1" else 0
-            temp["oper"] = int(op[-2])
+            op = data[ind]
+            temp["on"] = op & 1
+            op >>= 1
+            temp["oper"] = op & 1
+            op >>= 1
             ind += 1
 
             value = get_uleb128_from_bytearray(data[ind:])
@@ -246,11 +250,10 @@ class EnvSensor(Device):
                 ind += len(value)
 
             name = bytearray_to_str(data[ind:])
-            temp["name"] = name
+            temp["name"] = name.decode()
             ind += len(name) + 1
 
-            sensor = int(op[:-2], 2)
-            sensors_dict[2**sensor].append(temp)
+            sensors_dict[op].append(temp)
 
         return sensors_dict
 
@@ -263,7 +266,27 @@ class EnvSensor(Device):
         return self.__serial - 1
 
     def IAMHERE(self):
-        pass
+        payload = UrlCoder.encode_payload(self.src, BROADCAST_DST, self.__serial, self.dev_type, CMD.IAMHERE)
+
+        cmd_body = bytearray()
+        cmd_body.extend(str_to_bytearray(self.dev_name))
+        sensors = 0
+        count_triggers = 0 # непонятный найденный самим параметр
+        triggers = bytearray()
+        for key in self.dev_props.keys():
+            sensors |= 2**key
+            count_triggers += len(self.dev_props[key])
+            for trigger in self.dev_props[key]:
+                triggers.append((key << 2) | (trigger["oper"] << 1) | trigger["on"]) # преобразуем маску обратно
+                triggers.extend(uleb128_encode(trigger["value"]))
+                triggers.extend(str_to_bytearray(trigger["name"]))
+        cmd_body.append(sensors)
+        cmd_body.append(count_triggers)
+        cmd_body.extend(triggers)
+
+        payload.extend(cmd_body)
+        packet = UrlCoder.encode_packet(payload)
+        return packet
 
     def STATUS(self):
         pass
