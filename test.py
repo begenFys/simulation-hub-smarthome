@@ -1,5 +1,7 @@
-import base64
+from main import UrlCoder, EnvSensor, uleb128_encode, uleb128_decode
 
-# DbMG_38BBgaI0Kv6kzGK
-resp = bytearray([0x0d, 0xb3, 0x06, 0xff, 0x7f, 0x01, 0x06, 0x06,  0x88, 0xd0, 0xab, 0xfa, 0x93, 0x31, 0x8a])
-print(base64.urlsafe_b64encode(resp))
+packet = UrlCoder.decode(b"OAL_fwQCAghTRU5TT1IwMQ8EDGQGT1RIRVIxD7AJBk9USEVSMgCsjQYGT1RIRVIzCAAGT1RIRVI09w")
+payload = packet[0]["payload"]
+env = EnvSensor(payload["src"], payload["dev_type"], payload["cmd_body"]["dev_name"], payload["cmd_body"]["dev_props"])
+print(env.dev_props)
+print()

@@ -9,7 +9,7 @@
 # 6. crc кодирование конечной суммы payload +
 # 7. работа с разными типами устройств
 # 8. проверка на игнор пакета(гарантируется ли?) +
-
+from datetime import datetime
 # TODO - какие функции пригодятся
 # 1. Функция из 16 вида в ULEB128 и наоборот +
 # 2.
@@ -29,6 +29,9 @@ BROADCAST_DST: int = 0x3fff
 # а дальше мы будем PACKETS изменять, но это сделано чтобы было видно и понятно, так что не думаю что это критично.
 # Главное я пояснил момент
 PACKETS: List[bytearray] = []  # пакеты, которые мы будем потом оформлять в запрос
+TIME: int = 0
+TIMEOUT: int = 0
+TIMEOUT_FLAG: bool = True
 
 
 class CMD:  # чтобы в циферках не запутаться)
@@ -37,6 +40,16 @@ class CMD:  # чтобы в циферках не запутаться)
     GETSTATUS = 3
     STATUS = 4
     SETSTATUS = 5
+    TICK = 6
+
+
+class DEV:
+    HUB = 1
+    ENV_SENSOR = 2
+    SWITCH = 3
+    LAMP = 4
+    SOCKET = 5
+    CLOCK = 6
 
 
 # работа с форматов uleb128
@@ -61,19 +74,9 @@ def uleb128_length(data: bytearray) -> int:
     return length
 
 
-# считаем crc8
-def calculate_crc8(data: bytearray):
-    crc = 0x00  # Начальное значение CRC
-    for byte in data:
-        crc ^= byte  # Исключающее ИЛИ между текущим значением CRC и байтом данных
-        for _ in range(8):
-            if crc & 0x80:  # Проверка старшего бита CRC
-                crc = (crc << 1) ^ 0x1d  # Сдвиг влево и XOR с полиномом 0x1d
-            else:
-                crc <<= 1  # Сдвиг влево
-        crc &= 0xff  # Ограничение CRC до 8 бит
-
-    return crc
+def get_uleb128_from_bytearray(data: bytearray) -> bytearray:
+    data_len = uleb128_length(data)
+    return bytearray(data[:data_len])
 
 
 # преобразуем строк в нужный нам вид
@@ -84,7 +87,36 @@ def str_to_bytearray(data: str) -> bytearray:
     return byte_array
 
 
+def bytearray_to_str(data: bytearray) -> bytearray:
+    ind = 0
+    str_len = data[ind]
+    ind += 1
+    string = data[ind: ind + str_len]
+    return string
+
+
 class UrlCoder:
+    @staticmethod
+    # считаем crc8
+    def calculate_crc8(data: bytearray):
+        crc = 0x00  # Начальное значение CRC
+        for byte in data:
+            crc ^= byte  # Исключающее ИЛИ между текущим значением CRC и байтом данных
+            for _ in range(8):
+                if crc & 0x80:  # Проверка старшего бита CRC
+                    crc = (crc << 1) ^ 0x1d  # Сдвиг влево и XOR с полиномом 0x1d
+                else:
+                    crc <<= 1  # Сдвиг влево
+            crc &= 0xff  # Ограничение CRC до 8 бит
+
+        return crc
+
+    @staticmethod
+    def get_cmd_body(cmd_body: bytearray) -> Dict:
+        dev_name = bytearray_to_str(cmd_body)
+        dev_props = cmd_body[len(dev_name) + 1:]
+        return {"dev_name": dev_name, "dev_props": dev_props}
+
     @staticmethod
     def parse_payload(payload: bytearray) -> Dict:
         payload_json = {"src": 0, "dst": 0, "serial": 0, "dev_type": 0, "cmd": 0}
@@ -99,11 +131,15 @@ class UrlCoder:
         payload_json["dst"] = uleb128_decode(payload[ind:ind + dst_length]) if dst_length > 1 else payload[ind]
         ind += dst_length
 
-        payload_json["serial"] = payload[ind]
-        ind += 1
+        serial_length = uleb128_length(payload[ind:])
+        payload_json["serial"] = uleb128_decode(payload[ind:ind + serial_length]) if serial_length > 1 else payload[ind]
+        ind += serial_length
         payload_json["dev_type"] = payload[ind]
         ind += 1
         payload_json["cmd"] = payload[ind]
+        ind += 1
+        if ind < len(payload):
+            payload_json["cmd_body"] = UrlCoder.get_cmd_body(payload[ind:])
         return payload_json
 
     @staticmethod
@@ -118,24 +154,24 @@ class UrlCoder:
             except:
                 return None
 
-        def split_packets(response_bytes: bytearray) -> List[Dict]:
+        def split_packets(data: bytearray) -> List[Dict]:
             packets = []
             ind = 0
-            while ind < len(response_bytes):
-                packet = {"length": response_bytes[ind], "payload": bytearray(), "crc8": 0}
+            while ind < len(data):
+                packet = {"length": data[ind], "payload": bytearray(), "crc8": 0}
                 ind += 1
-                packet["payload"] = response_bytes[ind:ind + packet["length"]]
+                packet["payload"] = data[ind:ind + packet["length"]]
                 ind += packet["length"]
-                packet["crc8"] = response_bytes[ind]
-                if packet["crc8"] == calculate_crc8(packet["payload"]):  # игнор пакет, если контрольная не совпадает
+                packet["crc8"] = data[ind]
+                if packet["crc8"] == UrlCoder.calculate_crc8(packet["payload"]):  # игнор пакет, если crc8 не совпадает
                     packets.append(packet)
                 ind += 1
             return packets
 
         # основной код
-        response_bytes = base64_to_bytearray(response_base64)
-        if response_bytes:
-            packets = split_packets(response_bytes)
+        data = base64_to_bytearray(response_base64)
+        if data:
+            packets = split_packets(data)
             for ind in range(len(packets)):
                 packets[ind]["payload"] = UrlCoder.parse_payload(packets[ind]["payload"])
             return packets
@@ -158,7 +194,7 @@ class UrlCoder:
         packet = bytearray()
         packet.append(len(payload))
         packet.extend(payload)
-        packet.append(calculate_crc8(payload))
+        packet.append(UrlCoder.calculate_crc8(payload))
         return packet
 
     @staticmethod
@@ -169,12 +205,145 @@ class UrlCoder:
         return base64.urlsafe_b64encode(response)
 
 
-class Hub:
-    def __init__(self, src: int, dev_name: str) -> None:
+# Классы устройств
+class Device():
+    def __init__(self, src: int, dev_type: int, dev_name: str) -> None:
         self.src = src
-        self.__serial = 1
-        self.dev_type = 1
+        self.dev_type = dev_type
         self.dev_name = dev_name
+
+
+class EnvSensor(Device):
+    def __init__(self, src: int, dev_type: int, dev_name: str, dev_props: bytearray) -> None:
+        super().__init__(src, dev_type, dev_name)
+        self.dev_props = self.__parse_dev_props(dev_props)
+        self.__serial = 1
+
+    def __parse_dev_props(self, data: bytearray):
+        ind = 0
+        sensors = data[ind]
+        sensors_dict = {}
+        for i in range(4):
+            sensors_dict[2**i] = [] if sensors & 2**i else None
+
+        ind += 1 # BAD
+
+        ind += 1
+        while ind < len(data):
+            temp = {"on" : None, "name": None, "oper": None, "value": None} # у датчика наверняка можно поставить больше и меньше
+            op = bin(data[ind])[2:]
+            op = "0"*(4 - len(op)) + op
+            temp["on"] = 1 if op[-1] == "1" else 0
+            temp["oper"] = int(op[-2])
+            ind += 1
+
+            value = get_uleb128_from_bytearray(data[ind:])
+            if isinstance(value, int):
+                temp["value"] = value
+                ind += 1
+            else:
+                temp["value"] = uleb128_decode(value)
+                ind += len(value)
+
+            name = bytearray_to_str(data[ind:])
+            temp["name"] = name
+            ind += len(name) + 1
+
+            sensor = int(op[:-2], 2)
+            sensors_dict[2**sensor].append(temp)
+
+        return sensors_dict
+
+
+
+
+    @property
+    def serial(self) -> int:
+        self.__serial += 1
+        return self.__serial - 1
+
+    def IAMHERE(self):
+        pass
+
+    def STATUS(self):
+        pass
+
+
+class Switch(Device):
+    def __init__(self, src: int, dev_type: int, dev_name: str) -> None:
+        super().__init__(src, dev_type, dev_name)
+        self.__serial = 1
+
+    @property
+    def serial(self) -> int:
+        self.__serial += 1
+        return self.__serial - 1
+
+    def WHOISHERE(self) -> None:
+        pass
+
+    def IAMHERE(self) -> None:
+        pass
+
+    def STATUS(self) -> None:
+        pass
+
+
+class Lamp(Device):
+    def __init__(self, src: int, dev_type: int, dev_name: str) -> None:
+        super().__init__(src, dev_type, dev_name)
+        self.__serial = 1
+
+    @property
+    def serial(self) -> int:
+        self.__serial += 1
+        return self.__serial - 1
+
+    def WHOISHERE(self) -> None:
+        pass
+
+    def IAMHERE(self) -> None:
+        pass
+
+    def STATUS(self) -> None:
+        pass
+
+    def SETSTATUS(self) -> None:
+        pass
+
+
+class Socket(Device):
+    def __init__(self, src: int, dev_type: int, dev_name: str) -> None:
+        super().__init__(src, dev_type, dev_name)
+        self.__serial = 1
+
+    @property
+    def serial(self) -> int:
+        self.__serial += 1
+        return self.__serial - 1
+
+    def WHOISHERE(self) -> None:
+        pass
+
+    def IAMHERE(self) -> None:
+        pass
+
+    def STATUS(self) -> None:
+        pass
+
+    def SETSTATUS(self) -> None:
+        pass
+
+
+class Hub(Device):
+    def __init__(self, src: int, dev_type: int, dev_name: str) -> None:
+        super().__init__(src, dev_type, dev_name)
+        self.__serial = 1  # REWORK: понять как нормально наследовать статические атрибуты
+        self.devices = []
+        # self.__env_sensors: List[EnvSensor] = []
+        # self.__switches: List[Switch] = []
+        # self.__lamps: List[Lamp] = []
+        # self.__sockets: List[Socket] = []
 
     @property
     def serial(self) -> int:
@@ -191,27 +360,79 @@ class Hub:
         packet = UrlCoder.encode_packet(payload)
         return packet
 
+    def IAMHERE(self) -> bytearray:
+        payload = UrlCoder.encode_payload(self.src, BROADCAST_DST, self.__serial, self.dev_type, CMD.IAMHERE)
+
+        cmd_body = bytearray()
+        cmd_body.extend(str_to_bytearray(self.dev_name))
+        payload.extend(cmd_body)
+
+        packet = UrlCoder.encode_packet(payload)
+        return packet
+
+    def GETSTATUS(self) -> None:
+        pass
+
+    def SETSTATUS(self) -> None:
+        pass
+
+    def devices_IAMHERE(self) -> List[bytearray]:
+        packets = []
+        for device in self.devices:
+            packets.append(device.IAMHERE())
+        return packets
+
+
+# Класс Client - для отправки запросов
+class Client:
+    URL = "http://localhost:9998"
+
+    @staticmethod
+    def post(data: Union[str, bytes]) -> requests.Response:
+        res = requests.post(URL, data=data)
+        return res
+
 
 if __name__ == "__main__":
     URL: str = sys.argv[1]
     if "http" not in URL:
         URL = f"http://{URL}"
+    Client.URL = URL
     HUB_SRC: int = int(sys.argv[2], 16)  # в uleb
 
-    hub = Hub(HUB_SRC, "HUB01")
+    hub = Hub(HUB_SRC, DEV.HUB, "HUB01")
     PACKETS.append(hub.WHOISHERE())
     while PACKETS:
-        response = UrlCoder.encode(PACKETS)
-        res = requests.post(URL, data=response, timeout=300)
+        data = UrlCoder.encode(PACKETS)
+        res = Client.post(data)
         PACKETS.clear()
         if res.status_code == 200:
-            print(res.content)
-            print(UrlCoder.decode(res.content))
+            data = UrlCoder.decode(res.content)
+            for packet in data:
+                payload = packet["payload"]
+                if payload["dev_type"] == DEV.CLOCK and payload["cmd"] == CMD.TICK:
+                    TIME = int(payload["cmd_body"].hex(), 16)
+                    print("time:", TIME)
+                    TIMEOUT += 100
+                    if TIMEOUT > 300:
+                        TIMEOUT -= 300
+                        TIMEOUT_FLAG = False
+                elif payload["cmd"] == CMD.WHOISHERE:
+                    PACKETS.append(hub.IAMHERE())
+                    PACKETS.extend(hub.devices_IAMHERE())
+
+                    if payload["dev_type"] == DEV.ENV_SENSOR:
+                        env_sensor = EnvSensor(payload["src"], DEV.ENV_SENSOR, payload["cmd_body"]["dev_name"], payload["cmd_body"]["dev_props"])
+                        if env_sensor not in hub.devices["EnvSensor"]:
+                            hub.devices
+
+                elif payload["cmd"] == CMD.IAMHERE and not TIMEOUT_FLAG:
+                    pass
+                TIMEOUT_FLAG = True
+
         elif res.status_code == 204:
             sys.exit(0)
         else:
             sys.exit(99)
-
-
 
 # python main.py localhost:9998 ef0
