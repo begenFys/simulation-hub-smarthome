@@ -6,6 +6,8 @@
 
 **Creator's channel:** [@begenFys_life](https://t.me/begenFys_life)
 
+**[Тестовый сервер для отладки](https://github.com/blackav/smart-home-binary)**
+
 ## Настройка окружения
 
 1. Установить зависимости из Pipfile(заведомо установить pipenv)
